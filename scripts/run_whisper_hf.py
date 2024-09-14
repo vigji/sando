@@ -1,8 +1,11 @@
 from pathlib import Path
-import whisper
+
+# import whisper
 from tqdm import tqdm
 from pprint import pprint
 import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import time
 
 # CHANGE THIS TO YOUR DATA PATH:
 data_path = Path("/Users/vigji/Desktop/sando-data/audio")
@@ -46,7 +49,32 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:
         torch_device = sys.argv[2]
 
-    model = whisper.load_model("large-v3", device=torch_device)
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+    model_id = "openai/whisper-large-v3"
+
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        model_id,
+        torch_dtype=torch_dtype,
+        low_cpu_mem_usage=True,
+        use_safetensors=True,
+    )
+    model.to(device)
+
+    processor = AutoProcessor.from_pretrained(model_id)
+
+    pipe = pipeline(
+        "automatic-speech-recognition",
+        model=model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor,
+        torch_dtype=torch_dtype,
+        device=device,
+        model_kwargs={"model_max_length": 81810},
+    )
+
+    # model = whisper.load_model("large-v3", device=torch_device)
     # model.transcribe = torch.compile(model.transcribe, backend="inductor")
 
     # check if device is available:
@@ -87,23 +115,46 @@ if __name__ == "__main__":
 
     # Filter beforehand to have truetful progress bar:
     to_process = [
-        f
+        str(f)
         for f in all_omelie
         if not (data_output / get_output_filename(f, data_path)).exists()
     ]
 
-    for input_file in tqdm(to_process):
-        output_filename = data_output / get_output_filename(input_file, data_path)
+    start_time = time.time()
+    print(start_time)
+    result = pipe(
+        to_process[0], return_timestamps=True, generate_kwargs={"language": "italian"}
+    )
+    # batch_size=5)
 
-        # Call whisper model:
-        with torch.device(torch_device):
-            result = model.transcribe(
-                str(input_file),
-                initial_prompt="Un'omelia registrata durante una messa.",
-            )
+    # to be sure, pickle and save the result:
+    end_time = time.time()
+    print(end_time)
+    print("Time elapsed: ", end_time)
 
-        # Concatenate fragments and save results:
-        full_text = [t["text"] for t in result["segments"]]
+    print(result)
+    print(result.keys())
+    import pickle
 
-        with open(output_filename, "w") as f:
-            f.write("\n".join(full_text))
+    with open(data_path / "cached_result.pkl", "wb") as f:
+        pickle.dump(result, f)
+    print(result["segments"])
+
+    # print(result["timestamps"])
+
+    # for input_file in tqdm(to_process):
+    #     output_filename = data_output / get_output_filename(input_file, data_path)
+
+    #     # Call whisper model:
+    #     with torch.device(torch_device):
+
+    #         result = model.transcribe(
+    #             str(input_file),
+    #             initial_prompt="Un'omelia registrata durante una messa.",
+    #         )
+
+    #     # Concatenate fragments and save results:
+    #     full_text = [t["text"] for t in result["segments"]]
+
+    #     with open(output_filename, "w") as f:
+    #         f.write("\n".join(full_text))
